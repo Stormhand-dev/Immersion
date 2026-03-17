@@ -3,6 +3,7 @@
 -- call :Hide() *only* on BuffFrame and TemporaryEnchantFrame. On the way back (fade-in),
 -- show them at alpha=0 and animate normally.
 -- Added: defers BuffFrame/TemporaryEnchantFrame fade-in if a fade-out is mid-flight to avoid flicker.
+-- Added: fixes rogue stealth/main bar swap by restoring main action buttons after stance/page changes.
 -- The rest of the logic stays aligned with the stable version + timeouts; we don't touch chat/minimap.
 -- safe match helper (handles environments where string.match or strmatch may be nil/overridden)
 
@@ -111,7 +112,7 @@ local FRAME_NAMES = {
   -- Action bars
   "MainMenuBar",
   "MultiBarBottomLeft", "MultiBarBottomRight", "MultiBarLeft", "MultiBarRight",
-  "PetActionBarFrame", "ShapeshiftBarFrame", "DFRL_PetBar",
+  "PetActionBarFrame", "DFRL_PetBar",
 
   -- MicroMenu
   "CharacterMicroButton","SpellbookMicroButton","TalentMicroButton",
@@ -169,9 +170,9 @@ local DO_NOT_FORCE_SHOW = {
 local FADE_ONLY = {
   MainMenuBar = true,
   MultiBarBottomLeft = true, MultiBarBottomRight = true, MultiBarLeft = true, MultiBarRight = true,
-  PetActionBarFrame = true, ShapeshiftBarFrame = true,
+  PetActionBarFrame = true,
   PetFrame = true, -- prevents disappearing for good at the end of fade-out
--- BuffFrame = true, TemporaryEnchantFrame = true, -- <- removed on purpose
+  -- BuffFrame = true, TemporaryEnchantFrame = true, -- <- removed on purpose
 }
 
 -- ===================== CONTROLLERS (one per frame) =====================
@@ -379,7 +380,9 @@ zoneHideGuard:SetScript("OnUpdate", function()
       zoneHideGuard.wantHide = false
       CloseWindowsIfAllowed()
       for fr,c in pairs(Controllers) do
-        c.resume = fr:IsShown()
+        if fr:IsShown() then
+          c.resume = true
+        end
         c:StartFade(0, (zoneHideGuard.waited >= zoneHideGuard.maxWait) and "hide_timeout" or "hide_after_zone")
       end
     end
@@ -454,6 +457,127 @@ restoreFailsafe:SetScript("OnUpdate", function()
 end)
 
 -- ===================== Helpers =====================
+local function RestoreMainActionButtons()
+  for i = 1, 12 do
+    local btn = G("ActionButton"..i)
+    if btn then
+      if btn.Show then btn:Show() end
+      if btn.SetAlpha then btn:SetAlpha(1) end
+    end
+  end
+
+  for i = 1, 12 do
+    local btn = G("BonusActionButton"..i)
+    if btn then
+      if btn.Show then btn:Show() end
+      if btn.SetAlpha then btn:SetAlpha(1) end
+    end
+  end
+
+  local mm = G("MainMenuBar")
+  if mm then
+    if mm.Show then mm:Show() end
+    if mm.SetAlpha then mm:SetAlpha(1) end
+  end
+end
+
+local function RestoreDragonflightBarArtwork()
+  local names = {
+    "DFRL_MainBar",
+    "DFRL_ActionBar",
+    "DFRL_PWB_Panel",
+  }
+
+  for _, name in ipairs(names) do
+    local fr = G(name)
+    if fr then
+      if fr.Show then fr:Show() end
+      if fr.SetAlpha then fr:SetAlpha(1) end
+
+      if fr.GetRegions then
+        local regions = { fr:GetRegions() }
+        for _, r in ipairs(regions) do
+          if r then
+            if r.Show then r:Show() end
+            if r.SetAlpha then r:SetAlpha(1) end
+          end
+        end
+      end
+    end
+  end
+end
+
+
+local function RestoreDragonflightCustomButtonBackgrounds()
+  for i = 1, 12 do
+    local bg = G("DFRL_ActionButtonBg"..i)
+    if bg then
+      if bg.Show then bg:Show() end
+      if bg.SetAlpha then bg:SetAlpha(1) end
+    end
+
+    local border = G("DFRL_ActionButtonBorder"..i)
+    if border then
+      if border.Show then border:Show() end
+      if border.SetAlpha then border:SetAlpha(1) end
+    end
+  end
+end
+
+local function HideBlizzardButtonNormals()
+  local function HideButtonNormal(btn)
+    if not btn then return end
+
+    local nt = btn.GetNormalTexture and btn:GetNormalTexture() or nil
+    if nt then
+      if nt.Hide then nt:Hide() end
+      if nt.SetAlpha then nt:SetAlpha(0) end
+    end
+
+    local name = btn.GetName and btn:GetName() or nil
+    if name then
+      local normal = G(name .. "NormalTexture")
+      if normal then
+        if normal.Hide then normal:Hide() end
+        if normal.SetAlpha then normal:SetAlpha(0) end
+      end
+
+      local floatingBG = G(name .. "FloatingBG")
+      if floatingBG then
+        if floatingBG.Hide then floatingBG:Hide() end
+        if floatingBG.SetAlpha then floatingBG:SetAlpha(0) end
+      end
+    end
+  end
+
+  for i = 1, 12 do
+    HideButtonNormal(G("ActionButton"..i))
+    HideButtonNormal(G("BonusActionButton"..i))
+  end
+end
+
+local function NeedsActionBarFix()
+  for i = 1, 12 do
+    local btn = G("ActionButton"..i)
+    if btn then
+      local nt = btn.GetNormalTexture and btn:GetNormalTexture() or nil
+      if nt and nt.IsShown and nt:IsShown() then
+        return true
+      end
+    end
+
+    local bbtn = G("BonusActionButton"..i)
+    if bbtn then
+      local nt = bbtn.GetNormalTexture and bbtn:GetNormalTexture() or nil
+      if nt and nt.IsShown and nt:IsShown() then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+
 -- Triggers fade-out on all controlled frames, optionally delayed by ZoneText.
 -- Customization tip: toggling CLOSE_WINDOWS_ON_FADE changes whether game windows
 -- (spellbook, character sheet, etc.) are auto-closed when the UI fades out.
@@ -548,7 +672,7 @@ local function DebouncedShowForResting()
     for _,c in pairs(Controllers) do
       local fr  = c.frame
       local n   = fr and (fr:GetName() or "") or ""
-    local unit = fr and fr.unit or nil
+      local unit = fr and fr.unit or nil
       if unit and UnitExists and UnitExists(unit) then
         c.resume = true
         if fr and fr.Show then fr:Show() end
@@ -657,7 +781,6 @@ function f:Evaluate(reason)
     return
   end
 
-
   -- NEW: Do not fade out UI while in a raid
   local inRaid = (IsInRaid and IsInRaid()) or (GetNumRaidMembers and (GetNumRaidMembers() or 0) > 0)
   if inRaid then
@@ -678,14 +801,14 @@ function f:Evaluate(reason)
     return
   end
 
--- NEW: Do not fade out UI if player is not at 100% health
-if not IsPlayerFullHealth() then
-  restoreFailsafe:Hide()
-  ShowAll("priority:player_not_full_hp")
-  return
-end
+  -- NEW: Do not fade out UI if player is not at 100% health
+  if not IsPlayerFullHealth() then
+    restoreFailsafe:Hide()
+    ShowAll("priority:player_not_full_hp")
+    return
+  end
 
--- Remaining logic
+  -- Remaining logic
   if IsResting() then
     DebouncedShowForResting()
   else
@@ -706,6 +829,10 @@ f:RegisterEvent("ZONE_CHANGED_INDOORS")
 f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 f:RegisterEvent("UNIT_HEALTH")
 f:RegisterEvent("UNIT_MAXHEALTH")
+f:RegisterEvent("UPDATE_BONUS_ACTIONBAR")
+f:RegisterEvent("ACTIONBAR_PAGE_CHANGED")
+f:RegisterEvent("UPDATE_SHAPESHIFT_FORMS")
+f:RegisterEvent("UPDATE_SHAPESHIFT_USABLE")
 
 -- Master event handler.
 -- Handles:
@@ -844,6 +971,54 @@ f:SetScript("OnEvent", function()
     if arg1 == "player" then
       f:Evaluate("player_health_changed")
     end
+    return
+  end
+
+  if event=="UPDATE_BONUS_ACTIONBAR"
+  or event=="ACTIONBAR_PAGE_CHANGED"
+  or event=="UPDATE_SHAPESHIFT_FORMS"
+  or event=="UPDATE_SHAPESHIFT_USABLE" then
+
+    local shouldBeVisible = false
+    local now = GetTime and GetTime() or 0
+
+    if f.inCombat
+      or f.mouseOverBars
+      or ((f.postCombatGraceUntil or 0) > now)
+      or ((f.postTargetGraceUntil or 0) > now)
+      or ((f.postMouseoverGraceUntil or 0) > now)
+      or (ImmersionDB.showOnTarget and UnitExists and UnitExists("target") and not UnitIsDeadOrGhost("target"))
+      or IsResting()
+      or not IsPlayerFullHealth()
+      or ((IsInRaid and IsInRaid()) or (GetNumRaidMembers and (GetNumRaidMembers() or 0) > 0)) then
+      shouldBeVisible = true
+    end
+
+    if shouldBeVisible then
+      local function FixActionBarVisualState()
+        RestoreMainActionButtons()
+        RestoreDragonflightBarArtwork()
+        RestoreDragonflightCustomButtonBackgrounds()
+        HideBlizzardButtonNormals()
+
+        local c = Controllers and Controllers[G("MainMenuBar")]
+        if c then
+          c.resume = true
+          c:StartFade(1, "actionbar_state_fix")
+        end
+      end
+
+      C_TimerAfter(0.01, function()
+        FixActionBarVisualState()
+
+        C_TimerAfter(0.10, function()
+          if NeedsActionBarFix() then
+            FixActionBarVisualState()
+          end
+        end)
+      end)
+    end
+
     return
   end
 
