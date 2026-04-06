@@ -141,6 +141,9 @@ local FRAME_NAMES = {
   "DFRL_LatencyIndicator","DFRL_PagingContainer","DFRL_ActionBar","DFRLLowLevelTalentsButton","DFRL_ShapeshiftBar",
   "DFRL_PWB_Panel",
 
+  -- ItemRack
+  "ItemRack_InvFrame",
+
   -- Class Addons
   "COEEarthFrame","COEFireFrame",
 
